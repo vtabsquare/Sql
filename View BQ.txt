@@ -1,0 +1,28 @@
+Create or Replace View TableauDB_All.vw_Invoices_Header_Details as
+SELECT
+  *
+FROM
+  TableauDBData_All.dbo_Invoices_Header_Details;
+
+Create or Replace View TableauDB_All.vw_Invoice_Lines_Item_Details as
+Select * 
+from 
+TableauDBData_All.dbo_Invoice_Lines_Item_Details;
+
+Create or Replace View TableauDB_All.vw_Customer as
+Select * from TableauDBData_All.dbo_Customer;
+
+Create or Replace View TableauDB_All.vw_CustomerFields as
+Select * from TableauDBData_All.dbo_CustomerFields;
+
+create or replace view TableauDB_All.vw_Product as
+Select * from TableauDBData_All.dbo_Product;
+
+create or replace view TableauDB_All.vw_Product_Units as
+select * from TableauDBData_All.dbo_Product_Units;
+
+Create or Replace View TableauDBData_All.vw_ProductFields as
+Select * from TableauDBData_All.dbo_ProductFields;
+
+create or replace view TableauDB_All.vw_Currency as 
+select * from TableauDBData_All.dbo_Currency

@@ -1,0 +1,540 @@
+Create or Replace Procedure TableauDB_All.SP_repzone()
+Begin
+DECLARE Incremental_Time Datetime ;
+
+CREATE or Replace TABLE TableauDBData_All.tmp_Invoices_Header_Details_Staging AS
+select
+VBRK.LAND1 as CountryCode ,
+VBRK.VTWEG as Channel,
+VBRK.KUNAG as ERPCustomerCode,
+Cast(ZSKIP_MEA_DOCTYP.INVOICETYPEID as String) as InvoiceTypeId,
+ZSKIP_MEA_DOCTYP.FKART as SAPBillingType,
+VBRK.VBELN as InvoiceNumber ,
+Case when VBRK.FKDAT ='00000000' then current_datetime() 
+else parse_datetime('%Y%m%d',VBRK.FKDAT) END as InvoiceDate,
+case when LIKP.WADAT = '00000000'  OR LIKP.WADAT='20'or VBRK.FKDAT ='00000000' Then current_datetime()
+  WHEN LIKP.WADAT is NULL OR  LIKP.WADAT = '0'   then  parse_datetime('%Y%m%d',VBRK.FKDAT)
+else  PARSE_DATETIME('%Y%m%d',LIKP.WADAT) end as InvoiceShipDate,
+VBRK.NETWR as GrossTotal,
+0 as DiscountTotal,
+VBRK.NETWR as NetTotal,
+VBRK.MWSBK as VatTotal,
+VBRK.NETWR + VBRK.MWSBK as Total,
+VBRK.WAERK as CurrencyCode,
+CASE
+    WHEN VBRK.FKSTO IS NULL AND VBRK.SFAKN IS NULL THEN 'Active'
+
+    ELSE 'Passive'
+
+  END  as State,
+  0 as SurchargeTotal,
+ CASE
+    WHEN Concat(VBRK.ERDAT, VBRK.ERZET) = '00000000' THEN CURRENT_DATETIME()
+    ELSE CAST(CONCAT(PARSE_DATE('%Y%m%d', VBRK.ERDAT), ' ', PARSE_TIME('%H%M%S', VBRK.ERZET))as DATETIME)
+  END as RecordDateUtc
+,
+CASE
+    WHEN Concat(VBRK.AEDAT, '00:00:00') = '0000000000:00:00' THEN CURRENT_DATETIME()
+    ELSE CAST(Concat(PARSE_DATE('%Y%m%d',VBRK.AEDAT),' 00:00:00') AS DATETIME)
+  END as ModificationDateUtc
+from `LIB_EDW_RTP.sap_VBRK` VBRK 
+Left Join `LIB_EDW_RTP.sap_LIKP` LIKP on VBRK.VBELN = LIKP.VBELN
+Left Join `TableauDBData_All.dbo_ZSKIP_MEA_DOCTYP` ZSKIP_MEA_DOCTYP ON ZSKIP_MEA_DOCTYP.FKART = VBRK.FKART
+WHERE
+  cast(CURRENT_DATETIME as Datetime) <=Incremental_Time;
+-- Instead of CURRENT_DATETIME in where condition we need to use ModificationDateUtc which is T001W.LAND1
+
+
+
+
+
+MERGE `TableauDBData_All.dbo_Invoices_Header_Details` AS target
+USING `TableauDBData_All.tmp_Invoices_Header_Details_Staging` AS source
+ON target.InvoiceNumber = source.InvoiceNumber
+WHEN MATCHED THEN
+  UPDATE SET
+    target.CountryCode = source.CountryCode,
+    target.Channel = source.Channel,
+    target.ERPCustomerCode = source.ERPCustomerCode,
+    target.InvoiceTypeId = source.InvoiceTypeId,
+    target.SAPBillingType = source.SAPBillingType,
+    target.InvoiceNumber = source.InvoiceNumber,
+    target.InvoiceDate = source.InvoiceDate,
+    target.InvoiceShipDate = source.InvoiceShipDate,
+    target.GrossTotal = source.GrossTotal,
+    target.DiscountTotal = source.DiscountTotal,
+    target.SurchargeTotal = source.SurchargeTotal,
+    target.NetTotal = source.NetTotal,
+    target.VatTotal = source.VatTotal,
+    target.Total = source.Total,
+    target.CurrencyCode = source.CurrencyCode,
+    target.State = source.State,
+    target.RecordDateUtc = source.RecordDateUtc,
+    target.ModificationDateUtc = source.ModificationDateUtc
+   
+WHEN NOT MATCHED THEN
+  INSERT ( CountryCode, Channel, ERPCustomerCode, InvoiceTypeId, SAPBillingType, InvoiceNumber,
+          InvoiceDate, InvoiceShipDate, GrossTotal, DiscountTotal, SurchargeTotal, NetTotal, VatTotal, Total,
+          CurrencyCode, State, RecordDateUtc, ModificationDateUtc)
+  VALUES (source.CountryCode, source.Channel, source.ERPCustomerCode, source.InvoiceTypeId,
+          source.SAPBillingType, source.InvoiceNumber, source.InvoiceDate, source.InvoiceShipDate, source.GrossTotal,
+          source.DiscountTotal, source.SurchargeTotal, source.NetTotal, source.VatTotal, source.Total,
+          source.CurrencyCode, source.State, source.RecordDateUtc, source.ModificationDateUtc);
+
+
+-------------------------------------
+
+
+
+
+
+CREATE or Replace TABLE TableauDBData_All.tmp_Invoice_Lines_Item_Details_Staging AS
+Select 
+cast(VBRP.POSNR as Int64) as LineNumber,
+safe_CAST(VBRP.MATNR as Int64) as ERPProductRef,
+COALESCE(CAST(VBRP.VRKME AS STRING), '')  as UnitName,
+CAST(KONV.KPEIN as Int64) as UnitMultiplier,
+VBRP.FKIMG as Quantity,
+KONV.KWERT as UnitPrice,
+CASE
+    WHEN ZSKIP_MEA_INVCND.KSCHIL_TYPE = 'G' THEN KONV.KWERT
+    ELSE NULL -- Adjust this if you want a different default value when KSCHLTYPE is not 'G'
+  END as GrossTotal , 
+CASE
+    WHEN ZSKIP_MEA_INVCND.KSCHIL_TYPE = 'D' THEN KONV.KBETR/10
+    ELSE NULL -- Adjust this if you want a different default value when KSCHLTYPE is not 'D'
+  END as DiscountPercent, 
+CASE
+    WHEN ZSKIP_MEA_INVCND.KSCHIL_TYPE = 'D' THEN KONV.KBETR
+    ELSE NULL -- Adjust this if you want a different default value when KSCHLTYPE is not 'D'
+  END as DiscountTotal ,
+  CASE
+    WHEN ZSKIP_MEA_INVCND.KSCHIL_TYPE = 'S' THEN KONV.KWERT
+    ELSE NULL -- Adjust this if you want a different default value when KSCHLTYPE is not 'G'
+  END as SurchargeTotal,
+VBRP.NETWR as NetTotal,
+CASE
+    WHEN ZSKIP_MEA_INVCND.KSCHIL_TYPE = 'V' THEN KONV.KBETR/10
+    ELSE NULL -- Adjust this if you want a different default value when KSCHLTYPE is not 'G'
+  END as VatPercent,
+VBRP.MWSBP as VatTotal,
+VBRP.NETWR + VBRP.MWSBP as Total,
+Case when Concat(VBRK.ERDAT ,VBRK.ERZET)='0000000000:00:00' then Current_Datetime()
+ Else Cast(Concat(parse_Date('%Y%m%d',VBRK.ERDAT) ,' ', parse_Time('%H%M%S',VBRK.ERZET))as Datetime)END as RecordDateUtc,
+Case when Concat(VBRK.AEDAT ,'00:00:00')='0000000000:00:00'then Current_Datetime()
+ Else cast(Concat(parse_Date('%Y%m%d',VBRK.AEDAT) , ' ','00:00:00')as Datetime) end as ModificationDateUtc ,
+CASE
+    WHEN VBRK.FKSTO IS NULL AND VBRK.SFAKN IS NULL THEN 'Active'
+    ELSE 'Passive'
+  END as State
+from `LIB_EDW_RTP.sap_VBRK` VBRK  
+LEFT JOIN `LIB_EDW_RTP.sap_KONV` KONV On VBRK.KNUMV = KONV.KNUMV
+LEFT JOIN `LIB_EDW_RTP.sap_VBRP` VBRP On  VBRP.POSNR = KONV.KPOSN
+LEFT JOIN `TableauDBData_All.dbo_ZSKIP_MEA_INVCND` ZSKIP_MEA_INVCND On ZSKIP_MEA_INVCND.KSCHIL=KONV.KSCHL
+WHERE
+  cast(CURRENT_DATETIME() as datetime) <= Incremental_Time;
+
+
+MERGE `TableauDBData_All.dbo_Invoice_Lines_Item_Details` AS target
+USING `TableauDBData_All.tmp_Invoice_Lines_Item_Details_Staging` AS source
+ON target.ErpInvoiceId = source.ErpInvoiceId
+WHEN MATCHED THEN
+  UPDATE SET
+    
+    target.ErpInvoiceId = source.ErpInvoiceId,
+    target.LineNumber = source.LineNumber,
+    target.ERPProductRef = source.ERPProductRef,
+    target.UnitName = source.UnitName,
+    target.UnitMultiplier  = source.UnitMultiplier ,
+    target.Quantity = source.Quantity,
+    target.UnitPrice = source.UnitPrice,
+    target.GrossTotal = source.GrossTotal,
+    target.DiscountPercent =source.DiscountPercent, 
+    target.DiscountTotal = source.DiscountTotal,
+    target.SurchargeTotal = source.SurchargeTotal,
+    target.NetTotal = source.NetTotal,
+    target.VatTotal = source.VatTotal,
+    target.VatPercent=source.VatPercent,
+    target.Total = source.Total,
+    target.State = source.State,
+    target.RecordDateUtc = source.RecordDateUtc,
+    target.ModificationDateUtc = source.ModificationDateUtc
+
+WHEN NOT MATCHED THEN
+ INSERT (
+ErpInvoiceId,
+LineNumber,
+ERPProductRef,
+UnitName,
+UnitMultiplier,
+Quantity,
+UnitPrice,
+GrossTotal,
+DiscountPercent,
+DiscountTotal,
+SurchargeTotal,
+NetTotal,
+VatPercent,
+VatTotal,
+Total,
+RecordDateUtc,
+ModificationDateUtc,
+State)
+  VALUES (
+Source.ErpInvoiceId,
+Source.LineNumber,
+Source.ERPProductRef,
+Source.UnitName,
+Source.UnitMultiplier,
+Source.Quantity,
+Source.UnitPrice,
+Source.GrossTotal,
+Source.DiscountPercent,
+Source.DiscountTotal,
+Source.SurchargeTotal,
+Source.NetTotal,
+Source.VatPercent,
+Source.VatTotal,
+Source.Total,
+Source.RecordDateUtc,
+Source.ModificationDateUtc,
+Source.State);
+
+
+
+------------------------------------
+
+
+
+
+
+CREATE or Replace TABLE TableauDBData_All.tmp_dbo_Customer AS
+select 0 as Customer_Erp_Unique_Id,
+KNA1.LAND1 as CountryCode,
+0 as ChainCustomerId,
+0 as SalesRepresentativeName,
+KNA1.KUNNR as Code,
+KNA1.NAME1 as Name,
+KNA1.NAME1 as Name_EN,
+KNA1.KUNNR as CustomerSectorId,
+'Null ' as CustomerBusinessUnitId,
+'Null' as TaxOffice,
+KNA1.STCD1 as TaxNumber,	cast(KNA1.KATR10 as int64) as CustomerType,
+KNA1.STRAS as Street1,
+KNA1.ORT02 as Street2,
+KNA1.ORT02 as District,
+KNA1.ORT01 as City,
+KNA1.PSTLZ as PostalCode,
+KNA1.LAND1 as Country,
+KNA1.TELF1 as PhoneNumber,
+KNA1.TELFX as FaxNumber,
+ADR6.SMTP_ADDR as Email,
+Cast(KNA1.REGIO as String) as State,
+cast(KNA1.ERDAT as DateTime) as RecordDateUtc,
+CASE
+        WHEN KNA1.UPDAT = '0000-00-00' THEN CURRENT_DATETIME()
+        ELSE cast(KNA1.UPDAT as datetime)
+    END AS ModificationDateUtc
+from `LIB_EDW_RTP.sap_KNA1`KNA1
+Left join LIB_EDW_RTP.sap_ADR6 ADR6 on  ADR6.ADDRNUMBER = KNA1.ADRNR
+WHERE
+  CASE
+        WHEN KNA1.UPDAT = '0000-00-00' THEN CURRENT_DATETIME()
+        ELSE cast(KNA1.UPDAT as datetime)
+    END <= Incremental_Time;
+
+
+MERGE `TableauDBData_All.dbo_Customer` AS target
+USING `TableauDBData_All.tmp_dbo_Customer` AS source
+ON target.Code = source.Code
+WHEN MATCHED THEN
+  UPDATE SET
+    target.Customer_Erp_Unique_Id=source.Customer_Erp_Unique_Id,
+    target.CountryCode = source.CountryCode,
+   
+    target.ChainCustomerId= source.ChainCustomerId,
+    target.SalesRepresentativeName = source.SalesRepresentativeName,
+    target.Code  = source.Code,
+    target.Name = source.Name,
+    target.Name_EN	 = source.Name_EN	,
+    target.CustomerSectorId = source.CustomerSectorId,
+    target.CustomerBusinessUnitId = source.CustomerBusinessUnitId,
+    target.TaxOffice = source.TaxOffice,
+    target.TaxNumber = source.TaxNumber,
+    target.CustomerType = source.CustomerType,
+    target.Street1 = source.Street1,
+    target.Street2 = source.Street2,
+    target.District = source.District,
+    target.City = source.City,
+    target.PostalCode = source.PostalCode,
+    target.Country = source.Country,
+    target.PhoneNumber = source.PhoneNumber,
+    target.FaxNumber = source.FaxNumber,
+    target.Email = source.Email,
+    target.State = source.State,
+    target.RecordDateUtc = source.RecordDateUtc,
+    target.ModificationDateUtc = source.ModificationDateUtc
+WHEN NOT MATCHED THEN
+ INSERT (Customer_Erp_Unique_Id,
+CountryCode,
+ChainCustomerId,
+SalesRepresentativeName,
+Code,
+Name,
+Name_EN	,
+CustomerSectorId,
+CustomerBusinessUnitId,
+TaxOffice,
+TaxNumber,
+CustomerType,
+Street1,
+Street2 ,
+District,
+City,
+PostalCode,
+Country,
+PhoneNumber,
+FaxNumber,
+Email,
+State,
+RecordDateUtc,
+ModificationDateUtc)
+  VALUES (source.Customer_Erp_Unique_Id,
+Source.CountryCode,
+Source.ChainCustomerId,
+Source.SalesRepresentativeName,
+Source.Code,
+Source.Name,
+Source.Name_EN	,
+Source.CustomerSectorId,
+Source.CustomerBusinessUnitId,
+Source.TaxOffice,
+Source.TaxNumber,
+Source.CustomerType,
+Source.Street1,
+Source.Street2 ,
+Source.District,
+Source.City,
+Source.PostalCode,
+Source.Country,
+Source.PhoneNumber,
+Source.FaxNumber,
+Source.Email,
+Source.State,
+Source.RecordDateUtc,
+Source.ModificationDateUtc);
+
+
+
+----------------------------------------------
+
+
+
+
+
+CREATE or Replace TABLE TableauDBData_All.tmp_dbo_CustomerFields AS
+select KNA1.KUNNR as Id,
+KNA1.NAME1 as Name,'Null' as ParentName,0 as Type,
+KNA1.REGIO as State,
+cast(KNA1.ERDAT  as datetime) as RecordDateUtc,
+CASE
+        WHEN KNA1.UPDAT = '0000-00-00' THEN CURRENT_DATETIME()
+        ELSE cast(KNA1.UPDAT as datetime)
+    END AS ModificationDateUtc
+from `LIB_EDW_RTP.sap_KNA1` KNA1
+WHERE
+  CASE
+        WHEN KNA1.UPDAT = '0000-00-00' THEN CURRENT_DATETIME()
+        ELSE cast(KNA1.UPDAT as datetime)
+    END  <= Incremental_Time;
+
+
+MERGE `TableauDBData_All.dbo_CustomerFields` AS target
+USING `TableauDBData_All.tmp_dbo_CustomerFields` AS source
+ON target.Id = source.Id
+WHEN MATCHED THEN
+  UPDATE SET
+    target.Id = source.Id,
+    target.Name = source.Name,
+    target.ParentName = source.ParentName,
+    target.Type= source.Type,
+    target.State = source.State,
+    target.RecordDateUtc  = source.RecordDateUtc,
+    target.ModificationDateUtc = source.ModificationDateUtc
+WHEN NOT MATCHED THEN
+ INSERT ( Id,
+    Name,
+    ParentName,
+    Type,
+    State,
+    RecordDateUtc,
+    ModificationDateUtc)
+  VALUES (Source.Id,
+    Source.Name,
+    Source.ParentName,
+    Source.Type,
+    Source.State,
+    Source.RecordDateUtc,
+    Source.ModificationDateUtc);
+
+---------------------------------
+
+
+
+
+
+
+CREATE or Replace TABLE TableauDBData_All.tmp_dbo_Product AS
+SELECT MARA.HERKL as CountryCode,
+MARA.MATNR as ProductId,
+'Null' as Sku,
+MAKT.MAKTX as Name,
+MAKT.MAKTX as Description,
+MARA.MTART as ProductType,	
+Cast(MARA.MTART as int64) as ProductClassId,
+cast(MARA.MEINS as Int64) as MainGroupId,
+0 as GroupId,
+0 as VATPercentage,
+
+CASE
+    WHEN MARA.ERSDA = '00000000' THEN CURRENT_DATETIME()
+    ELSE PARSE_DATETIME('%Y%m%d %H:%M:%S', MARA.ERSDA) end as RecordDateUtc,
+
+CASE
+    WHEN MARA.LAEDA = '00000000' THEN CURRENT_DATETIME()
+    ELSE PARSE_DATETIME('%Y%m%d %H:%M:%S', MARA.LAEDA) end as ModificationDateUtc
+,'Null' as State
+from `LIB_EDW_RTP.sap_MARA` MARA
+Left Join `LIB_EDW_RTP.sap_MAKT` MAKT on MAKT.MATNR = MARA.MATNR
+WHERE
+  CASE
+    WHEN MARA.LAEDA = '00000000' THEN CURRENT_DATETIME()
+    ELSE PARSE_DATETIME('%Y%m%d %H:%M:%S', MARA.LAEDA) end <= Incremental_Time;
+
+
+MERGE `TableauDBData_All.dbo_Product` AS target
+USING `TableauDBData_All.tmp_dbo_Product` AS source
+ON target.ProductId = source.ProductId
+WHEN MATCHED THEN
+  UPDATE SET
+    target.CountryCode = source.CountryCode,
+    target.ProductId = source.ProductId,
+    target.Sku = source.Sku,
+    target.Name= source.Name,
+    target.Description=source.Description,
+    target.ProductType = source.ProductType,
+    target.ProductClassId  = source.ProductClassId,
+    target.MainGroupId = source.MainGroupId,
+    target.GroupId = source.GroupId,
+    target.VATPercentage = source.VATPercentage,
+    target.RecordDateUtc = source.RecordDateUtc,
+    target.ModificationDateUtc = source.ModificationDateUtc,
+    target.state=source.state
+ 
+WHEN NOT MATCHED THEN
+ INSERT (    CountryCode,
+ProductId,Sku,
+Name, 
+Description, 
+ProductType,ProductClassId,MainGroupId,GroupId,VATPercentage,
+RecordDateUtc,
+ModificationDateUtc,State)
+  VALUES (Source.CountryCode,
+    Source.ProductId,
+    Source.Sku,
+    Source.Name,
+    Source.Description,
+    Source.ProductType,
+    Source.ProductClassId,
+    Source.MainGroupId,
+    Source.GroupId,
+    Source.VATPercentage,
+    Source.RecordDateUtc,
+    Source.ModificationDateUtc,
+    Source.State);
+
+
+----------------------------
+
+
+
+
+
+
+CREATE or Replace TABLE TableauDBData_All.tmp_dbo_ProductFields AS
+select
+
+ MARA.MATNR as Id,
+MAKT.MAKTX as Name,' ' as ParentName,
+MARA.MTART as Type,' ' as State,
+CASE
+    WHEN MARA.ERSDA = '00000000' THEN CURRENT_DATETIME()
+    ELSE PARSE_DATETIME('%Y%m%d %H:%M:%S', MARA.ERSDA) end as RecordDateUtc,
+CASE
+    WHEN MARA.LAEDA = '00000000' THEN CURRENT_DATETIME()
+    ELSE PARSE_DATETIME('%Y%m%d %H:%M:%S', MARA.LAEDA) end AS ModificationDateUtc
+from `LIB_EDW_RTP.sap_MARA` MARA
+Left join `LIB_EDW_RTP.sap_MAKT` MAKT On MAKT.MATNR=MARA.MATNR
+WHERE
+  CASE
+    WHEN MARA.LAEDA = '00000000' THEN CURRENT_DATETIME()
+    ELSE PARSE_DATETIME('%Y%m%d %H:%M:%S', MARA.LAEDA) end <= Incremental_Time;
+
+
+MERGE `TableauDBData_All.dbo_ProductFields` AS target
+USING `TableauDBData_All.tmp_dbo_ProductFields` AS source
+ON target.Id = source.Id
+WHEN MATCHED THEN
+  UPDATE SET
+    target.Id = source.Id,
+    target.Name = source.Name,
+    target.ParentName = source.ParentName,
+    target.Type= source.Type,
+    target.State = source.State,
+    target.RecordDateUtc  = source.RecordDateUtc,
+    target.ModificationDateUtc = source.ModificationDateUtc
+WHEN NOT MATCHED THEN
+ INSERT (   Id,
+    Name,
+    ParentName,
+    Type,
+    State,
+    RecordDateUtc,
+    ModificationDateUtc)
+  VALUES (Source.Id,
+    Name,
+    ParentName,
+    Type,
+    State,
+    RecordDateUtc,
+    ModificationDateUtc);
+
+Create Or Replace TABLE TableauDBData_All.dbo_Currency (
+    CountryCode STRING Not Null,
+    FromCurrency STRING Not null,
+    ToCurrency STRING Not Null,
+    ConversionDate String Not Null,
+    State STRING,
+    RecordDateUtc datetime Not null,
+    ModificationDateUtc Datetime not null
+
+);
+
+INSERT INTO TableauDBData_All.dbo_Currency(CountryCode,
+FromCurrency,
+ToCurrency,
+ConversionDate,
+State,
+RecordDateUtc,
+ModificationDateUtc
+)
+Select T005.LAND1,
+TCURR.FCURR,
+TCURR.TCURR,
+TCURR.GDATU,T005.LAND1,current_datetime,current_datetime 
+FROM `LIB_EDW_RTP.sap_TCURR` TCURR
+LEFT JOIN `LIB_EDW_RTP.sap_T005` T005 On TCURR.MANDT = T005.MANDT;
+
+Set  Incremental_Time = CURRENT_DATETIME();
+
+End;

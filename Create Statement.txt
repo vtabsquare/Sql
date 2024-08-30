@@ -1,0 +1,446 @@
+Create Or Replace Table TableauDBData_All.dbo_Country(
+CountryCode String Not Null,
+Name String Not Null,
+Description String);
+
+INSERT INTO `TableauDBData_All.dbo_Country` (CountryCode,Name,Description)
+SELECT T005T.LAND1,T005T.LANDX,T005T.LANDX50
+FROM `LIB_EDW_RTP.sap_T005T` T005T;
+
+
+
+Create Or Replace Table TableauDBData_All.dbo_Invoices_Header_Details(
+Invoice_Erp_Unique_Id STRING DEFAULT (GENERATE_UUID()),
+CountryCode	string Not Null,
+Channel	String Not Null,
+ERPCustomerCode	String Not Null,
+InvoiceTypeId 	String ,
+SAPBillingType	String ,
+InvoiceNumber 	String Not Null,
+InvoiceDate 	Datetime Not Null,
+InvoiceShipDate	datetime,
+GrossTotal Float64 Not Null,
+DiscountTotal	Float64 Not Null ,
+SurchargeTotal	Float64 Not Null,
+NetTotal 	Float64 Not Null,
+VatTotal 	Float64 Not Null,
+Total 	Float64 Not Null,
+CurrencyCode	String Not Null,
+State 	String Not Null,
+RecordDateUtc datetime Not Null,
+ModificationDateUtc datetime Not Null
+ );
+
+Insert into TableauDBData_All.dbo_Invoices_Header_Details(
+CountryCode,
+Channel,
+ERPCustomerCode,
+InvoiceTypeId,
+SAPBillingType,
+InvoiceNumber,
+InvoiceDate,
+InvoiceShipDate,
+GrossTotal,
+DiscountTotal,
+NetTotal,
+VatTotal,
+Total,
+CurrencyCode,
+State,
+SurchargeTotal,
+RecordDateUtc,
+ModificationDateUtc)
+select
+VBRK.LAND1,
+VBRK.VTWEG,
+VBRK.KUNAG,
+Cast(ZSKIP_MEA_DOCTYP.INVOICETYPEID as String),
+ZSKIP_MEA_DOCTYP.FKART,
+VBRK.VBELN,
+Case when VBRK.FKDAT ='00000000' then current_datetime() 
+else parse_datetime('%Y%m%d',VBRK.FKDAT) END,
+case when LIKP.WADAT = '00000000'  OR LIKP.WADAT='20'or VBRK.FKDAT ='00000000' Then current_datetime()
+  WHEN LIKP.WADAT is NULL OR  LIKP.WADAT = '0'   then  parse_datetime('%Y%m%d',VBRK.FKDAT)
+else  PARSE_DATETIME('%Y%m%d',LIKP.WADAT) end,
+VBRK.NETWR,
+0,
+VBRK.NETWR,
+VBRK.MWSBK,
+VBRK.NETWR + VBRK.MWSBK,
+VBRK.WAERK
+,
+CASE
+    WHEN VBRK.FKSTO IS NULL AND VBRK.SFAKN IS NULL THEN 'Active'
+
+    ELSE 'Passive'
+
+  END AS State,
+0,
+ CASE
+    WHEN Concat(VBRK.ERDAT, VBRK.ERZET) = '00000000' THEN CURRENT_DATETIME()
+    ELSE CAST(CONCAT(PARSE_DATE('%Y%m%d', VBRK.ERDAT), ' ', PARSE_TIME('%H%M%S', VBRK.ERZET))as DATETIME)
+  END ,
+
+  CASE
+    WHEN Concat(VBRK.AEDAT, '00:00:00') = '0000000000:00:00' THEN CURRENT_DATETIME()
+    ELSE CAST(Concat(PARSE_DATE('%Y%m%d',VBRK.AEDAT),' 00:00:00') AS DATETIME)
+  END
+from `LIB_EDW_RTP.sap_VBRK` VBRK
+Left Join `LIB_EDW_RTP.sap_LIKP` LIKP on VBRK.VBELN = LIKP.VBELN
+Left Join `TableauDBData_All.dbo_ZSKIP_MEA_DOCTYP` ZSKIP_MEA_DOCTYP ON ZSKIP_MEA_DOCTYP.FKART = VBRK.FKART
+ 
+Limit 1000;
+
+
+
+
+Create Or Replace Table TableauDBData_All.dbo_Invoice_Lines_Item_Details(
+Invoice_Line_Erp STRING DEFAULT (GENERATE_UUID()),
+ErpInvoiceId	STRING DEFAULT (GENERATE_UUID()) 	,
+LineNumber	Int64,
+ERPProductRef	int64 	,
+UnitName 	String	Not Null,
+UnitMultiplier 	int64	Not Null,
+Quantity	Float64	,
+UnitPrice 	Float64,
+GrossTotal 	Float64	,
+DiscountPercent 	Float64	,
+DiscountTotal	Float64,
+SurchargeTotal	Float64 ,
+NetTotal 	Float64 ,
+VatPercent 	Float64 ,
+VatTotal 	Float64 ,
+Total 	Float64 ,
+RecordDateUtc 	datetime	,
+ModificationDateUtc 	datetime	,
+State 	String	);
+
+
+Insert into TableauDBData_All.dbo_Invoice_Lines_Item_Details(
+LineNumber,
+ERPProductRef,
+UnitName,
+UnitMultiplier,
+Quantity,
+UnitPrice,
+GrossTotal,
+DiscountPercent,
+DiscountTotal,
+SurchargeTotal,
+NetTotal,
+VatPercent,
+VatTotal,
+Total,
+RecordDateUtc,
+ModificationDateUtc,
+State)
+
+SELECT
+CAST(VBRP.POSNR as Int64),
+safe_CAST(VBRP.MATNR as Int64),
+COALESCE(CAST(VBRP.VRKME AS STRING), ''),
+CAST(KONV.KPEIN as Int64),
+VBRP.FKIMG,
+KONV.KWERT AS unitprice,
+CASE
+    WHEN ZSKIP_MEA_INVCND.KSCHIL_TYPE = 'G' THEN KONV.KWERT
+    ELSE NULL -- Adjust this if you want a different default value when KSCHLTYPE is not 'G'
+  END as Gross_Total,
+CASE
+    WHEN ZSKIP_MEA_INVCND.KSCHIL_TYPE = 'D' THEN KONV.KBETR/10
+    ELSE NULL -- Adjust this if you want a different default value when KSCHLTYPE is not 'D'
+  END,
+CASE
+    WHEN ZSKIP_MEA_INVCND.KSCHIL_TYPE = 'D' THEN KONV.KBETR
+    ELSE NULL -- Adjust this if you want a different default value when KSCHLTYPE is not 'D'
+  END,
+CASE
+    WHEN ZSKIP_MEA_INVCND.KSCHIL_TYPE = 'S' THEN KONV.KWERT
+    ELSE NULL -- Adjust this if you want a different default value when KSCHLTYPE is not 'G'
+  END,
+VBRP.NETWR,
+CASE
+    WHEN ZSKIP_MEA_INVCND.KSCHIL_TYPE = 'V' THEN KONV.KBETR/10
+    ELSE NULL -- Adjust this if you want a different default value when KSCHLTYPE is not 'G'
+  END,
+VBRP.MWSBP,
+VBRP.NETWR + VBRP.MWSBP,
+Case when Concat(VBRK.ERDAT ,VBRK.ERZET)='0000000000:00:00' then Current_Datetime()
+ Else Cast(Concat(parse_Date('%Y%m%d',VBRK.ERDAT) ,' ', parse_Time('%H%M%S',VBRK.ERZET))as Datetime)END,
+Case when Concat(VBRK.AEDAT ,'00:00:00')='0000000000:00:00'then Current_Datetime()
+ Else cast(Concat(parse_Date('%Y%m%d',VBRK.AEDAT) , ' ','00:00:00')as Datetime) end,
+ CASE
+    WHEN VBRK.FKSTO IS NULL AND VBRK.SFAKN IS NULL THEN 'Active'
+    ELSE 'Passive'
+  END AS State
+from `LIB_EDW_RTP.sap_VBRK` VBRK  
+LEFT JOIN `LIB_EDW_RTP.sap_KONV` KONV On VBRK.KNUMV = KONV.KNUMV
+LEFT JOIN `LIB_EDW_RTP.sap_VBRP` VBRP On  VBRP.POSNR = KONV.KPOSN
+LEFT JOIN `TableauDBData_All.dbo_ZSKIP_MEA_INVCND` ZSKIP_MEA_INVCND On ZSKIP_MEA_INVCND.KSCHIL=KONV.KSCHL
+Limit 2000;
+
+
+
+Create Or Replace table TableauDBData_All.dbo_Customer(
+Customer_Erp_Unique_Id	String Not Null,
+CountryCode	String Not Null,
+ChainCustomerId	String	,
+SalesRepresentativeName	String	,
+Code 	String Not Null,
+Name 	String Not Null,
+Name_EN	String,
+CustomerSectorId	String Not Null,
+CustomerBusinessUnitId	String ,
+TaxOffice 	String,
+TaxNumber 	String,
+CustomerType	String	Not Null,
+Street1 	String Not Null,
+Street2 	String ,
+District 	String Not Null,
+City	String	Not Null,
+PostalCode 	String	,
+Country	String Not Null,
+PhoneNumber 	String,
+FaxNumber 	String,
+Email	String,
+State 	String	Not Null,
+RecordDateUtc 	datetime	Not Null,
+ModificationDateUtc 	datetime	Not Null);
+
+INSERT INTO TableauDBData_All.dbo_Customer(Customer_Erp_Unique_Id,
+CountryCode,ChainCustomerId,SalesRepresentativeName,
+Code, 
+Name, 
+Name_EN,CustomerSectorId,CustomerBusinessUnitId,TaxOffice,TaxNumber,CustomerType,
+Street1, 
+Street2, 
+District, 
+City,
+PostalCode, 
+Country,
+PhoneNumber, 
+FaxNumber, 
+Email,
+State, 
+RecordDateUtc, 
+ModificationDateUtc)
+select KNA1.KUNNR ,
+KNA1.LAND1,KNVH.HKUNNR ,KNVK.NAME1 ,
+KNA1.KUNNR,
+KNA1.NAME1,
+KNA1.NAME1,KNA1.KUNNR,KNVV.VKBUR,KNA1.STCD1,KNA1.STCD2,	KNA1.KTOKD ,
+KNA1.STRAS,
+KNA1.ORT02,
+KNA1.ORT02,
+KNA1.ORT01,
+KNA1.PSTLZ,
+KNA1.LAND1,
+KNA1.TELF1,
+KNA1.TELFX,
+ADR6.SMTP_ADDR,
+Cast(KNA1.REGIO as String),
+ CASE WHEN KNA1.UPDAT ='00000000' THEN Current_datetime() else PARSE_DATETIME('%Y%m%d %H:%M:%S',KNA1.ERDAT) End,
+CASE
+        WHEN KNA1.UPDAT = '00000000' THEN CURRENT_DATETIME()
+        ELSE PARSE_DATETIME('%Y%m%d %H:%M:%S',KNA1.UPDAT)
+    END AS ModificationDateUtc
+from `LIB_EDW_RTP.sap_KNA1`KNA1
+Left join LIB_EDW_RTP.sap_ADR6 ADR6 on  ADR6.ADDRNUMBER = KNA1.ADRNR
+Left Join `LIB_EDW_RTP.sap_KNVH` KNVH on KNVH.KUNNR =KNA1.KUNNR
+Left Join `LIB_EDW_RTP.sap_KNVK` KNVK on   KNVK.KUNNR = KNA1.KUNNR
+Left Join `LIB_EDW_RTP.sap_KNVV` KNVV on   KNA1.KUNNR = KNVV.KUNNR; 
+
+Create Or Replace TABLE TableauDBData_All.dbo_CustomerFields (
+    Id String Not Null,
+    Name STRING Not Null,
+    ParentName STRING ,
+    Type Int64 Not Null,
+    State STRING Not Null,
+    RecordDateUtc datetime Not Null,
+    ModificationDateUtc datetime Not Null
+);
+INSERT INTO TableauDBData_All.dbo_CustomerFields (
+Id,
+Name,ParentName,Type,
+State,
+RecordDateUtc,
+ModificationDateUtc)
+select KNA1.KUNNR,
+KNA1.NAME1,KNVH.HKUNNR,
+ CASE
+    WHEN KNA1.BRAN3 IS NOT NULL THEN 1
+    WHEN KNVV.VKBUR IS NOT NULL THEN 2
+    ELSE 0
+  END AS Type,
+KNA1.REGIO,
+CASE
+        WHEN KNA1.ERDAT = '00000000'OR KNA1.ERDAT='20240124' THEN CURRENT_DATETIME()
+        ELSE PARSE_DATE('%Y%m%d',KNA1.ERDAT) END,
+CASE
+        WHEN KNA1.UPDAT = '00000000' THEN CURRENT_DATETIME()
+        ELSE PARSE_DATETIME('%Y%m%d %H:%M:%S',KNA1.UPDAT)
+    END AS ModificationDateUtc
+from `LIB_EDW_RTP.sap_KNA1` KNA1
+left join `LIB_EDW_RTP.sap_KNVH` KNVH On KNA1.KUNNR=KNVH.KUNNR
+LEFT JOIN
+  `LIB_EDW_RTP.sap_KNVV` KNVV ON KNA1.KUNNR = KNVV.KUNNR;
+ 
+
+
+Create Or Replace TABLE TableauDBData_All.dbo_Product (
+    CountryCode STRING ,
+    ProductId String Not Null,
+    Sku STRING Not Null,
+    Name STRING Not Null,
+    Description STRING,
+    ProductType String Not Null,
+    ProductClassId String Not Null,
+    MainGroupId String Not Null,
+    GroupId String Not Null,
+    VATPercentage FLOAT64 Not Null,
+    RecordDateUtc Datetime Not Null,
+    ModificationDateUtc Datetime Not Null,
+    State String );
+   
+INSERT INTO TableauDBData_All.dbo_Product(
+CountryCode,
+ProductId,Sku,
+Name, 
+Description, 
+ProductType,ProductClassId,MainGroupId,GroupId,VATPercentage,
+RecordDateUtc,
+ModificationDateUtc,State)
+SELECT Z.ZZISOCODE,
+MARA.MATNR,MARA.MATNR,
+MAKT.MAKTX,
+MAKT.MAKTX,
+MARA.MTART,	MARA.MTART,MARA.MEINS,MARA.EXTWG ,0,
+
+CASE
+    WHEN MARA.ERSDA = '00000000' THEN CURRENT_DATETIME()
+    ELSE PARSE_DATETIME('%Y%m%d', MARA.ERSDA) end,
+
+CASE
+    WHEN MARA.LAEDA = '00000000' THEN CURRENT_DATETIME()
+    ELSE PARSE_DATETIME('%Y%m%d', MARA.LAEDA) end
+,T001W.REGIO
+from `LIB_EDW_RTP.sap_MARA` MARA
+Left Join `LIB_EDW_RTP.sap_MAKT` MAKT on MAKT.MATNR = MARA.MATNR
+LEFT Join `LIB_EDW_RTP.sap_MARC` MARC on MARC.MATNR = MARA.MATNR
+Left join `LIB_EDW_RTP.sap_T001W` T001W on T001W.WERKS = MARC.WERKS
+LEFT JOIN `TableauDBData_All.dbo_ZMEA_COUNTRY_CDE` Z on T001W.LAND1 = Z.ZZCOUNTRY
+LIMIT 1000;
+
+
+Create Or Replace TABLE TableauDBData_All.dbo_Product_Units(
+ProductUnitId String Not Null,
+ProductId String Not Null,
+    Multiplier String Not Null,
+    Barcode STRING Not Null,
+    DisplayOrder INT64 ,
+    Weight FLOAT64 Not Null,
+    CurrencyCode STRING,
+    UnitPrice FLOAT64 ,
+    State String ,
+    RecordDateUtc Datetime Not null,
+ModificationDateUtc Datetime Not Null
+);
+Insert into TableauDBData_All.dbo_Product_Units(
+ProductUnitId ,
+ProductId ,
+    Multiplier ,
+    Barcode ,
+   -- DisplayOrder ,
+    Weight ,
+    CurrencyCode ,
+    UnitPrice ,
+   -- State ,
+    RecordDateUtc,
+ModificationDateUtc)
+Select Cast(MARM.MEINH as String),
+cast(MARM.MATNR as String),
+Cast(MARM.UMREN as String),
+MARM.EAN11,
+--T006.MSEHI ,
+MARA.NTGEW,
+T001.WAERS,
+MBEW.STPRS,
+case when MARA.ERSDA = '00000000' THEN CURRENT_DATETIME()
+    ELSE PARSE_DATETIME('%Y%m%d',MARA.ERSDA) END,
+CASE WHEN MARA.LAEDA = '00000000' THEN CURRENT_DATETIME()
+    ELSE PARSE_DATETIME('%Y%m%d',MARA.LAEDA ) END
+
+from `LIB_EDW_RTP.sap_MARM` MARM
+
+Left Join `LIB_EDW_RTP.sap_MARA` MARA ON  MARA.MATNR =MARM.MATNR
+LEFT Join `LIB_EDW_RTP.sap_MARC` MARC on MARC.MATNR = MARA.MATNR
+Left join `LIB_EDW_RTP.sap_T001W` T001W ON T001W.WERKS = MARC.WERKS
+Left join `LIB_EDW_RTP.sap_T001` T001 ON T001.BUKRS = T001W.WERKS
+LEFT JOIN `LIB_EDW_RTP.sap_MBEW` MBEW ON MBEW.MATNR = MARA.MATNR
+LIMIT 1000
+;
+
+
+Create Or Replace TABLE TableauDBData_All.dbo_ProductFields (
+    Id String not null,
+    Name STRING not null,
+    ParentName STRING,
+    Type STRING not null,
+    State STRING not null,
+    RecordDateUtc datetime not null,
+    ModificationDateUtc datetime not null
+);
+
+
+INSERT INTO TableauDBData_All.dbo_ProductFields(
+Id,
+Name,
+ParentName,
+Type,
+State,
+RecordDateUtc,
+ModificationDateUtc)
+select
+MARA.MATNR,
+MAKT.MAKTX,
+MARA.PRDHA,
+MARA.MTART,
+COALESCE(T001W.REGIO,''),
+CASE
+    WHEN MARA.ERSDA = '00000000' THEN CURRENT_DATETIME()
+    ELSE PARSE_DATE('%Y%m%d ', MARA.ERSDA) end,
+CASE
+    WHEN MARA.LAEDA = '00000000' THEN CURRENT_DATETIME()
+    ELSE PARSE_DATE('%Y%m%d', MARA.LAEDA) end AS ModificationDateUtc
+from `LIB_EDW_RTP.sap_MARA` MARA
+Left join `LIB_EDW_RTP.sap_MAKT` MAKT On MAKT.MATNR=MARA.MATNR
+LEFT Join `LIB_EDW_RTP.sap_MARC` MARC on MARC.MATNR = MARA.MATNR
+Left join `LIB_EDW_RTP.sap_T001W` T001W ON T001W.WERKS = MARC.WERKS;
+
+
+Create Or Replace TABLE TableauDBData_All.dbo_Currency (
+    CountryCode STRING ,
+    FromCurrency STRING Not null,
+    ToCurrency STRING Not Null,
+    ConversionDate String Not Null,
+    State STRING,
+    RecordDateUtc datetime Not null,
+    ModificationDateUtc Datetime not null
+
+);
+INSERT INTO TableauDBData_All.dbo_Currency(CountryCode,
+FromCurrency,
+ToCurrency,
+ConversionDate,
+State,
+RecordDateUtc,
+ModificationDateUtc
+)
+Select Z.ZZISOCODE,
+TCURR.FCURR,
+TCURR.TCURR,
+TCURR.GDATU,T005.LAND1,current_datetime,current_datetime 
+FROM `LIB_EDW_RTP.sap_TCURR` TCURR
+LEFT JOIN `LIB_EDW_RTP.sap_T001` T001 On T001.WAERS = TCURR.FCURR
+Left join `TableauDBData_All.dbo_ZMEA_COUNTRY_CDE` Z on T001.LAND1 =Z.ZZCOUNTRY
+Left join `LIB_EDW_RTP.sap_T005` T005 on T005.LAND1= Z.ZZCOUNTRY
